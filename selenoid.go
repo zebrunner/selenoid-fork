@@ -133,6 +133,11 @@ func create(w http.ResponseWriter, r *http.Request) {
 		queue.Drop()
 		return
 	}
+	if browser.W3CCaps.Caps.ExtensionCapabilities == nil {
+		browser.W3CCaps.Caps.VNC = true
+		browser.W3CCaps.Caps.Video = true
+		browser.W3CCaps.Caps.Log = true
+	}
 	if browser.W3CCaps.Caps.BrowserName() != "" && browser.Caps.BrowserName() == "" {
 		browser.Caps = browser.W3CCaps.Caps
 	}

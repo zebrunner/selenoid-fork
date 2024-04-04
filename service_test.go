@@ -13,13 +13,12 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/aandryashin/matchers"
 	"github.com/aerokube/selenoid/config"
 	"github.com/aerokube/selenoid/service"
 	"github.com/aerokube/selenoid/session"
-	"github.com/aerokube/util"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	assert "github.com/stretchr/testify/require"
 	"golang.org/x/net/websocket"
 )
 
@@ -40,8 +39,8 @@ func updateMux(mux http.Handler) {
 	lock.Lock()
 	defer lock.Unlock()
 	mockServer = httptest.NewServer(mux)
-	os.Setenv("DOCKER_HOST", "tcp://"+hostPort(mockServer.URL))
-	os.Setenv("DOCKER_API_VERSION", "1.29")
+	_ = os.Setenv("DOCKER_HOST", "tcp://"+hostPort(mockServer.URL))
+	_ = os.Setenv("DOCKER_API_VERSION", "1.29")
 	cli, _ = client.NewClientWithOpts(client.FromEnv)
 }
 
@@ -60,7 +59,7 @@ func testMux() http.Handler {
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			output := `{"id": "e90e34656806", "warnings": []}`
-			w.Write([]byte(output))
+			_, _ = w.Write([]byte(output))
 		},
 	))
 	mux.HandleFunc("/v1.29/containers/e90e34656806/start", http.HandlerFunc(
@@ -80,9 +79,9 @@ func testMux() http.Handler {
 			w.WriteHeader(http.StatusOK)
 			const streamTypeStderr = 2
 			header := []byte{streamTypeStderr, 0, 0, 0, 0, 0, 0, 9}
-			w.Write(header)
+			_, _ = w.Write(header)
 			data := []byte("test-data")
-			w.Write(data)
+			_, _ = w.Write(data)
 		},
 	))
 	mux.HandleFunc("/v%s/containers/e90e34656806", http.HandlerFunc(
@@ -160,7 +159,7 @@ func testMux() http.Handler {
 			  "Mounts": []
 			}
 			`, p, p, p, p, p, p)
-			w.Write([]byte(output))
+			_, _ = w.Write([]byte(output))
 		},
 	))
 	mux.HandleFunc("/v1.29/networks/net-1/connect", http.HandlerFunc(
@@ -263,18 +262,18 @@ func TestFindDockerIPSpecified(t *testing.T) {
 func testDocker(t *testing.T, env *service.Environment, cfg *config.Config) {
 	starter := createDockerStarter(t, env, cfg)
 	startedService, err := starter.StartWithCancel()
-	AssertThat(t, err, Is{nil})
-	AssertThat(t, startedService.Url, Not{nil})
-	AssertThat(t, startedService.Container, Not{nil})
-	AssertThat(t, startedService.Container.ID, EqualTo{"e90e34656806"})
-	AssertThat(t, startedService.HostPort.VNC, EqualTo{"127.0.0.1:5900"})
-	AssertThat(t, startedService.Cancel, Not{nil})
+	assert.NoError(t, err)
+	assert.NotNil(t, startedService.Url)
+	assert.NotNil(t, startedService.Container)
+	assert.Equal(t, startedService.Container.ID, "e90e34656806")
+	assert.Equal(t, startedService.HostPort.VNC, "127.0.0.1:5900")
+	assert.NotNil(t, startedService.Cancel)
 	startedService.Cancel()
 }
 
 func createDockerStarter(t *testing.T, env *service.Environment, cfg *config.Config) service.Starter {
 	cli, err := client.NewClientWithOpts(client.FromEnv)
-	AssertThat(t, err, Is{nil})
+	assert.NoError(t, err)
 	manager := service.DefaultManager{Environment: env, Client: cli, Config: cfg}
 	caps := session.Caps{
 		DeviceName:            "firefox",
@@ -299,8 +298,8 @@ func createDockerStarter(t *testing.T, env *service.Environment, cfg *config.Con
 		TestName:              "my-cool-test",
 	}
 	starter, success := manager.Find(caps, 42)
-	AssertThat(t, success, Is{true})
-	AssertThat(t, starter, Not{nil})
+	assert.True(t, success)
+	assert.NotNil(t, starter)
 	return starter
 }
 
@@ -310,7 +309,7 @@ func failingMux(numDeleteRequests *int) http.Handler {
 		func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			output := `{"id": "e90e34656806", "warnings": []}`
-			w.Write([]byte(output))
+			_, _ = w.Write([]byte(output))
 		},
 	))
 	mux.HandleFunc("/v1.29/containers/e90e34656806/start", http.HandlerFunc(
@@ -334,8 +333,8 @@ func TestDeleteContainerOnStartupError(t *testing.T) {
 	env := testEnvironment()
 	starter := createDockerStarter(t, env, testConfig(env))
 	_, err := starter.StartWithCancel()
-	AssertThat(t, err, Not{nil})
-	AssertThat(t, numDeleteRequests, EqualTo{1})
+	assert.Error(t, err)
+	assert.Equal(t, numDeleteRequests, 1)
 }
 
 func TestFindDriver(t *testing.T) {
@@ -347,8 +346,8 @@ func TestFindDriver(t *testing.T) {
 		VNC:              true,
 	}
 	starter, success := manager.Find(caps, 42)
-	AssertThat(t, success, Is{true})
-	AssertThat(t, starter, Not{nil})
+	assert.True(t, success)
+	assert.NotNil(t, starter)
 }
 
 func TestGetVNC(t *testing.T) {
@@ -364,8 +363,8 @@ func TestGetVNC(t *testing.T) {
 	})
 	defer sessions.Remove("test-session")
 
-	u := fmt.Sprintf("ws://%s/vnc/test-session", util.HostPort(srv.URL))
-	AssertThat(t, readDataFromWebSocket(t, u), EqualTo{"test-data"})
+	u := fmt.Sprintf("ws://%s/vnc/test-session", hostPort(srv.URL))
+	assert.Equal(t, readDataFromWebSocket(t, u), "test-data")
 }
 
 func testTCPServer(data string) net.Listener {
@@ -376,8 +375,8 @@ func testTCPServer(data string) net.Listener {
 			if err != nil {
 				continue
 			}
-			io.WriteString(conn, data)
-			conn.Close()
+			_, _ = io.WriteString(conn, data)
+			_ = conn.Close()
 			return
 		}
 	}()
@@ -386,12 +385,12 @@ func testTCPServer(data string) net.Listener {
 
 func readDataFromWebSocket(t *testing.T, wsURL string) string {
 	ws, err := websocket.Dial(wsURL, "", "http://localhost")
-	AssertThat(t, err, Is{nil})
+	assert.NoError(t, err)
 
 	var msg = make([]byte, 512)
 	_, err = ws.Read(msg)
 	msg = bytes.Trim(msg, "\x00")
-	//AssertThat(t, err, Is{nil})
+	//assert.NoError(t, err)
 	return string(msg)
 }
 
@@ -408,6 +407,6 @@ func TestGetLogs(t *testing.T) {
 	})
 	defer sessions.Remove("test-session")
 
-	u := fmt.Sprintf("ws://%s/logs/test-session", util.HostPort(srv.URL))
-	AssertThat(t, readDataFromWebSocket(t, u), EqualTo{"test-data"})
+	u := fmt.Sprintf("ws://%s/logs/test-session", hostPort(srv.URL))
+	assert.Equal(t, readDataFromWebSocket(t, u), "test-data")
 }

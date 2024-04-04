@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aerokube/selenoid/info"
 	"io"
 	"log"
 	"net"
@@ -27,7 +28,6 @@ import (
 	"github.com/aerokube/selenoid/jsonerror"
 	"github.com/aerokube/selenoid/service"
 	"github.com/aerokube/selenoid/session"
-	"github.com/aerokube/util"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/imdario/mergo"
@@ -110,9 +110,9 @@ func getSerial() uint64 {
 func create(w http.ResponseWriter, r *http.Request) {
 	sessionStartTime := time.Now()
 	requestId := serial()
-	user, remote := util.RequestInfo(r)
+	user, remote := info.RequestInfo(r)
 	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
+	_ = r.Body.Close()
 	if err != nil {
 		log.Printf("[%d] [ERROR_READING_REQUEST] [%v]", requestId, err)
 		jsonerror.InvalidArgument(err).Encode(w)
@@ -152,7 +152,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 	var finalVideoName, finalLogName string
 	for _, fmc := range firstMatchCaps {
 		caps = browser.Caps
-		mergo.Merge(&caps, *fmc)
+		_ = mergo.Merge(&caps, *fmc)
 		caps.ProcessExtensionCapabilities()
 		sessionTimeout, err = getSessionTimeout(caps.SessionTimeout, maxTimeout, timeout)
 		if err != nil {
@@ -228,7 +228,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			if rsp != nil {
-				rsp.Body.Close()
+				_ = rsp.Body.Close()
 			}
 			switch ctx.Err() {
 			case context.DeadlineExceeded:
@@ -240,7 +240,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[%d] [SESSION_FAILED] [%s] [%s]", requestId, u.String(), err)
 				jsonerror.UnknownError(err).Encode(w)
 			case context.Canceled:
-				log.Printf("[%d] [CLIENT_DISCONNECTED] [%s] [%s] [%.2fs]", requestId, user, remote, util.SecondsSince(sessionStartTime))
+				log.Printf("[%d] [CLIENT_DISCONNECTED] [%s] [%s] [%.2fs]", requestId, user, remote, info.SecondsSince(sessionStartTime))
 			}
 			queue.Drop()
 			cancel()
@@ -249,7 +249,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			if rsp != nil {
-				rsp.Body.Close()
+				_ = rsp.Body.Close()
 			}
 			log.Printf("[%d] [SESSION_FAILED] [%s] [%s]", requestId, u.String(), err)
 			jsonerror.SessionNotCreated(err).Encode(w)
@@ -291,6 +291,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[%d] [ERROR_READING_RESPONSE] [%v]", requestId, err)
 			queue.Drop()
 			cancel()
+			w.WriteHeader(resp.StatusCode)
 			return
 		}
 		newBody, sessionId, err := processBody(body, r.Host)
@@ -298,12 +299,13 @@ func create(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[%d] [ERROR_PROCESSING_RESPONSE] [%v]", requestId, err)
 			queue.Drop()
 			cancel()
+			w.WriteHeader(resp.StatusCode)
 			return
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(newBody))
 		resp.ContentLength = int64(len(newBody))
 		w.WriteHeader(resp.StatusCode)
-		w.Write(newBody)
+		_, _ = w.Write(newBody)
 		s.ID = sessionId
 	}
 	if s.ID == "" {
@@ -377,7 +379,7 @@ func create(w http.ResponseWriter, r *http.Request) {
 	sess.Cancel = cancelAndRenameFiles
 	sessions.Put(s.ID, sess)
 	queue.Create()
-	log.Printf("[%d] [SESSION_CREATED] [%s] [%d] [%.2fs]", requestId, s.ID, i, util.SecondsSince(sessionStartTime))
+	log.Printf("[%d] [SESSION_CREATED] [%s] [%d] [%.2fs]", requestId, s.ID, i, info.SecondsSince(sessionStartTime))
 }
 
 func removeSelenoidOptions(input []byte) []byte {
@@ -418,12 +420,19 @@ func processBody(input []byte, host string) ([]byte, string, error) {
 	if err != nil {
 		return nil, sessionId, fmt.Errorf("parse body response: %v", err)
 	}
-	if raw, ok := body["value"]; ok {
-		if v, ok := raw.(map[string]interface{}); ok {
-			if raw, ok := v["capabilities"]; ok {
-				if c, ok := raw.(map[string]interface{}); ok {
-					sessionId = v["sessionId"].(string)
-					c["se:cdp"] = fmt.Sprintf("ws://%s/devtools/%s/", host, sessionId)
+	// handle jsonwp response from older browsers (chrome < 75)
+	if rawId, ok := body["sessionId"]; ok {
+		if si, ok := rawId.(string); ok {
+			sessionId = si
+		}
+	} else {
+		if raw, ok := body["value"]; ok {
+			if v, ok := raw.(map[string]interface{}); ok {
+				if raw, ok := v["capabilities"]; ok {
+					if c, ok := raw.(map[string]interface{}); ok {
+						sessionId = v["sessionId"].(string)
+						c["se:cdp"] = fmt.Sprintf("ws://%s/devtools/%s/", host, sessionId)
+					}
 				}
 			}
 		}
@@ -513,7 +522,7 @@ func getTemporaryFileName(dir string, extension string) string {
 
 func generateRandomFileName(extension string) string {
 	randBytes := make([]byte, 16)
-	rand.Read(randBytes)
+	_, _ = rand.Read(randBytes)
 	return "selenoid" + hex.EncodeToString(randBytes) + extension
 }
 
@@ -553,7 +562,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 				}
 				if r.Method == http.MethodDelete && len(fragments) == 3 {
 					if enableFileUpload {
-						os.RemoveAll(filepath.Join(os.TempDir(), id))
+						_ = os.RemoveAll(filepath.Join(os.TempDir(), id))
 					}
 					cancel = sess.Cancel
 					sessions.Remove(id)
@@ -588,7 +597,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 
 func defaultErrorHandler(requestId uint64) func(http.ResponseWriter, *http.Request, error) {
 	return func(w http.ResponseWriter, r *http.Request, err error) {
-		user, remote := util.RequestInfo(r)
+		user, remote := info.RequestInfo(r)
 		log.Printf("[%d] [CLIENT_DISCONNECTED] [%s] [%s] [Error: %v]", requestId, user, remote, err)
 		w.WriteHeader(http.StatusBadGateway)
 	}
@@ -679,7 +688,7 @@ func fileUpload(w http.ResponseWriter, r *http.Request) {
 	}{
 		V: fileName,
 	}
-	json.NewEncoder(w).Encode(reply)
+	_ = json.NewEncoder(w).Encode(reply)
 }
 
 func vnc(wsconn *websocket.Conn) {
@@ -700,11 +709,11 @@ func vnc(wsconn *websocket.Conn) {
 			defer conn.Close()
 			wsconn.PayloadType = websocket.BinaryFrame
 			go func() {
-				io.Copy(wsconn, conn)
-				wsconn.Close()
+				_, _ = io.Copy(wsconn, conn)
+				_ = wsconn.Close()
 				log.Printf("[%d] [VNC_SESSION_CLOSED] [%s]", requestId, sid)
 			}()
-			io.Copy(conn, wsconn)
+			_, _ = io.Copy(conn, wsconn)
 			log.Printf("[%d] [VNC_CLIENT_DISCONNECTED] [%s]", requestId, sid)
 		} else {
 			log.Printf("[%d] [VNC_NOT_ENABLED] [%s]", requestId, sid)
@@ -726,7 +735,7 @@ func logs(w http.ResponseWriter, r *http.Request) {
 			deleteFileIfExists(requestId, w, r, logOutputDir, paths.Logs, "DELETED_LOG_FILE")
 			return
 		}
-		user, remote := util.RequestInfo(r)
+		user, remote := info.RequestInfo(r)
 		if _, ok := r.URL.Query()[jsonParam]; ok {
 			listFilesAsJson(requestId, w, logOutputDir, "LOG_ERROR")
 			return
@@ -751,7 +760,7 @@ func listFilesAsJson(requestId uint64, w http.ResponseWriter, dir string, errSta
 		ret = append(ret, f.Name())
 	}
 	w.Header().Add("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ret)
+	_ = json.NewEncoder(w).Encode(ret)
 }
 
 func streamLogs(wsconn *websocket.Conn) {
@@ -772,7 +781,7 @@ func streamLogs(wsconn *websocket.Conn) {
 		}
 		defer r.Close()
 		wsconn.PayloadType = websocket.BinaryFrame
-		stdcopy.StdCopy(wsconn, wsconn, r)
+		_, _ = stdcopy.StdCopy(wsconn, wsconn, r)
 		log.Printf("[%d] [CONTAINER_LOGS_DISCONNECTED] [%s]", requestId, sid)
 	} else {
 		log.Printf("[%d] [SESSION_NOT_FOUND] [%s]", requestId, sid)
@@ -782,7 +791,7 @@ func streamLogs(wsconn *websocket.Conn) {
 func status(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	ready := limit > sessions.Len()
-	json.NewEncoder(w).Encode(
+	_ = json.NewEncoder(w).Encode(
 		map[string]interface{}{
 			"value": map[string]interface{}{
 				"message": fmt.Sprintf("Selenoid %s built at %s", gitRevision, buildStamp),
@@ -793,7 +802,7 @@ func status(w http.ResponseWriter, _ *http.Request) {
 
 func welcome(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf("You are using Selenoid %s!", gitRevision)))
+	_, _ = w.Write([]byte(fmt.Sprintf("You are using Selenoid %s!", gitRevision)))
 }
 
 func onTimeout(t time.Duration, f func()) chan struct{} {
